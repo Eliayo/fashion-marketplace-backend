@@ -2,7 +2,7 @@ from decimal import Decimal
 from django.conf import settings
 from django.db import models
 from products.models import Product, ProductVariant
-from accounts.models import VendorProfile
+from accounts.models import VendorProfile, User
 
 
 class Cart(models.Model):
