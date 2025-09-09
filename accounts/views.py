@@ -1,10 +1,10 @@
 from rest_framework import generics, status
-from .models import User
-from .serializers import RegisterSerializer, AdminUserSerializer
+from .models import User, VendorProfile
+from .serializers import RegisterSerializer, AdminUserSerializer, VendorProfileSerializer
 from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework.permissions import IsAuthenticated, AllowAny
-from .permissions import IsAdmin, IsSeller, IsCustomer
+from .permissions import IsAdmin, IsVendor, IsCustomer
 
 
 class RegisterView(generics.CreateAPIView):
@@ -26,7 +26,7 @@ class ProfileView(APIView):
 
 
 class SellerOnlyView(APIView):
-    permission_classes = [IsAuthenticated, IsSeller]
+    permission_classes = [IsAuthenticated, IsVendor]
 
     def get(self, request):
         return Response({"message": "Welcome Seller!"})
@@ -72,12 +72,39 @@ class UserRoleUpdateView(APIView):
             return Response({"detail": "User not found."}, status=status.HTTP_404_NOT_FOUND)
 
         new_role = request.data.get("role")
-        if new_role not in [User.Roles.CUSTOMER, User.Roles.SELLER]:
+        if new_role not in [User.Roles.CUSTOMER, User.Roles.VENDOR]:
             return Response(
-                {"detail": "Invalid role. Only 'customer' or 'seller' allowed."},
+                {"detail": "Invalid role. Only 'customer' or 'vendor' allowed."},
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
         user.role = new_role
         user.save()
+
+        if new_role == User.Roles.VENDOR and not hasattr(user, 'vendor_profile'):
+            VendorProfile.objects.create(user=user)
+
         return Response({"detail": f"User {user.username} role updated to {user.role}."})
+
+
+class VendorProfileView(APIView):
+    permission_classes = [IsAuthenticated, IsVendor]
+
+    def get(self, request):
+        serializer = VendorProfileSerializer(request.user.vendor_profile)
+        return Response(serializer.data)
+
+    def patch(self, request):
+        profile = request.user.vendor_profile
+        serializer = VendorProfileSerializer(
+            profile, data=request.data, partial=True)
+        if serializer.is_valid():
+            serializer.save()
+            return Response(serializer.data)
+        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+
+class VendorListView(generics.ListAPIView):
+    queryset = VendorProfile.objects.all()
+    serializer_class = VendorProfileSerializer
+    permission_classes = [IsAuthenticated, IsAdmin]

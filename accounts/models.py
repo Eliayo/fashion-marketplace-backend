@@ -16,3 +16,16 @@ class User(AbstractUser):
 
     def __str__(self):
         return f"{self.username} ({self.role})"
+
+
+class VendorProfile(models.Model):
+    user = models.OneToOneField(
+        User, on_delete=models.CASCADE, related_name="vendor_profile")
+    business_name = models.CharField(max_length=255, blank=True, null=True)
+    logo = models.ImageField(upload_to="vendor_logos/", blank=True, null=True)
+    description = models.TextField(blank=True, null=True)
+    verified = models.BooleanField(default=False)
+    contact_email = models.EmailField(blank=True, null=True)
+
+    def __str__(self):
+        return self.business_name or f"Vendor {self.user.username}"

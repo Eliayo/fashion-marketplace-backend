@@ -1,5 +1,5 @@
 from rest_framework import serializers
-from .models import User
+from .models import User, VendorProfile
 
 
 class RegisterSerializer(serializers.ModelSerializer):
@@ -27,3 +27,12 @@ class AdminUserSerializer(serializers.ModelSerializer):
         model = User
         fields = ["id", "username", "email", "role",
                   "phone", "address", "must_change_password"]
+
+
+class VendorProfileSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = VendorProfile
+        fields = ["id", "business_name", "logo",
+                  "description", "verified", "contact_email"]
+        # only admin can change 'verified'
+        read_only_fields = ["id", "verified"]
