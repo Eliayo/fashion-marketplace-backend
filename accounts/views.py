@@ -1,4 +1,4 @@
-from rest_framework import generics, status
+from rest_framework import generics, status, permissions
 from .models import User, VendorProfile
 from .serializers import RegisterSerializer, AdminUserSerializer, VendorProfileSerializer
 from rest_framework.views import APIView
@@ -108,3 +108,29 @@ class VendorListView(generics.ListAPIView):
     queryset = VendorProfile.objects.all()
     serializer_class = VendorProfileSerializer
     permission_classes = [IsAuthenticated, IsAdmin]
+
+
+class SellerApprovalView(APIView):
+    permission_classes = [permissions.IsAuthenticated, IsAdmin]
+
+    def post(self, request, pk):
+        try:
+            seller = VendorProfile.objects.get(pk=pk)
+            seller.verified = True
+            seller.save()
+            return Response({"message": f"Seller '{seller.business_name}' approved successfully."})
+        except VendorProfile.DoesNotExist:
+            return Response({"error": "Seller not found."}, status=404)
+
+
+class SellerRejectView(APIView):
+    permission_classes = [permissions.IsAuthenticated, IsAdmin]
+
+    def post(self, request, pk):
+        try:
+            seller = VendorProfile.objects.get(pk=pk)
+            seller.verification_status = False
+            seller.save()
+            return Response({"message": f"Seller '{seller.business_name}' rejected/disabled."})
+        except VendorProfile.DoesNotExist:
+            return Response({"error": "Seller not found."}, status=404)

@@ -2,7 +2,8 @@ from django.urls import path
 from rest_framework_simplejwt.views import TokenObtainPairView, TokenRefreshView
 from .views import (RegisterView, ProfileView, SellerOnlyView, AdminOnlyView, CustomerOnlyView,
                     UserListView, UserDetailView, UserRoleUpdateView,
-                    VendorProfileView, VendorListView
+                    VendorProfileView, VendorListView, SellerApprovalView,
+                    SellerRejectView
                     )
 
 urlpatterns = [
@@ -23,4 +24,9 @@ urlpatterns = [
     # Vendor profile management
     path("vendor/profile/", VendorProfileView.as_view(), name="vendor-profile"),
     path("vendors/", VendorListView.as_view(), name="vendor-list"),
+    # Seller management
+    path("sellers/<int:pk>/approve/",
+         SellerApprovalView.as_view(), name="seller-approve"),
+    path("sellers/<int:pk>/reject/",
+         SellerRejectView.as_view(), name="seller-reject"),
 ]
