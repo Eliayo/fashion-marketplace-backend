@@ -35,16 +35,28 @@ class Order(models.Model):
         ("cancelled", "Cancelled"),
     ]
 
-    user = models.ForeignKey(settings.AUTH_USER_MODEL,
-                             on_delete=models.CASCADE, related_name="orders")
+    user = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name="orders"
+    )
     vendor = models.ForeignKey(
-        VendorProfile, on_delete=models.PROTECT, related_name="orders")
+        VendorProfile,
+        on_delete=models.PROTECT,
+        related_name="orders"
+    )
     total_price = models.DecimalField(
-        max_digits=10, decimal_places=2, default=Decimal("0.00"))
+        max_digits=10, decimal_places=2, default=Decimal("0.00")
+    )
     status = models.CharField(
-        max_length=20, choices=STATUS_CHOICES, default="pending")
+        max_length=20, choices=STATUS_CHOICES, default="pending"
+    )
     commission = models.DecimalField(
-        max_digits=10, decimal_places=2, default=Decimal("0.00"))  # platform cut
+        max_digits=10, decimal_places=2, default=Decimal("0.00")
+    )
+    transaction_ref = models.CharField(  # 🔑 link orders under same payment
+        max_length=100, null=True, blank=True, db_index=True
+    )
     created_at = models.DateTimeField(auto_now_add=True)
 
     def __str__(self):

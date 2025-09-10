@@ -6,6 +6,16 @@ from decimal import Decimal
 from .models import Cart, CartItem, Order, OrderItem
 from .serializers import CartSerializer, CartItemSerializer, OrderSerializer
 from accounts.permissions import IsAdmin, IsVendor, IsCustomer
+from .services import send_order_email
+from paystackapi.transaction import Transaction
+from django.conf import settings
+from django.views.decorators.csrf import csrf_exempt
+from django.utils.decorators import method_decorator
+import json
+from django.http import JsonResponse
+from collections import defaultdict
+from django.db import transaction
+import uuid
 
 
 class CartView(APIView):
@@ -42,42 +52,64 @@ class CheckoutView(APIView):
         if not cart.items.exists():
             return Response({"error": "Cart is empty."}, status=status.HTTP_400_BAD_REQUEST)
 
-        # assume one vendor per order (split-cart logic can be added later)
-        first_item = cart.items.first()
-        vendor = first_item.product.vendor
-
-        total = Decimal(0)
-        order = Order.objects.create(
-            user=request.user,
-            vendor=vendor,
-            total_price=0,
-            commission=0,
-            status="pending"
-        )
-
+        # Group cart items by vendor
+        vendor_groups = defaultdict(list)
         for item in cart.items.all():
-            price = item.product.price * item.quantity
-            OrderItem.objects.create(
-                order=order,
-                product=item.product,
-                variant=item.variant,
-                quantity=item.quantity,
-                price=item.product.price
-            )
-            total += price
+            vendor_groups[item.product.vendor].append(item)
 
-        # Apply commission (10%)
-        commission = total * Decimal("0.10")
-        order.total_price = total
-        order.commission = commission
-        order.status = "paid"  # simulate instant payment success
-        order.save()
+        # Shared transaction reference
+        transaction_ref = f"txn_{uuid.uuid4().hex[:12]}"
+
+        created_orders = []
+
+        with transaction.atomic():
+            for vendor, items in vendor_groups.items():
+                total = Decimal(0)
+                order = Order.objects.create(
+                    user=request.user,
+                    vendor=vendor,
+                    total_price=0,
+                    commission=0,
+                    status="pending",
+                    transaction_ref=transaction_ref
+                )
+
+                for item in items:
+                    price = item.product.price * item.quantity
+                    OrderItem.objects.create(
+                        order=order,
+                        product=item.product,
+                        variant=item.variant,
+                        quantity=item.quantity,
+                        price=item.product.price
+                    )
+                    total += price
+
+                # Apply commission (10%)
+                commission = total * Decimal("0.10")
+                order.total_price = total
+                order.commission = commission
+                order.save()
+
+                created_orders.append(order)
 
         # Clear cart
         cart.items.all().delete()
 
-        serializer = OrderSerializer(order)
-        return Response(serializer.data, status=status.HTTP_201_CREATED)
+        # 🔔 Notify customer once
+        send_order_email(
+            subject="Order Confirmation",
+            message=f"Hi {request.user.username},\n\nYou placed {len(created_orders)} orders. Transaction reference: {transaction_ref}\n\nThank you for shopping with us!",
+            recipient_list=[request.user.email],
+        )
+
+        return Response(
+            {
+                "transaction_ref": transaction_ref,
+                "orders": OrderSerializer(created_orders, many=True).data,
+            },
+            status=status.HTTP_201_CREATED,
+        )
 
 
 class OrderListView(generics.ListAPIView):
@@ -116,4 +148,79 @@ class OrderStatusUpdateView(APIView):
 
         order.status = new_status
         order.save()
+
+        # 🔔 Notify customer
+        send_order_email(
+            subject="Order Status Update",
+            message=f"Hi {order.user.username},\n\nYour order #{order.id} status has been updated to '{order.status}'.",
+            recipient_list=[order.user.email],
+        )
+
         return Response(OrderSerializer(order).data, status=200)
+
+
+class OrderDetailView(generics.RetrieveAPIView):
+    serializer_class = OrderSerializer
+    permission_classes = [permissions.IsAuthenticated]
+
+    def get_queryset(self):
+        user = self.request.user
+        if user.role == "admin":
+            return Order.objects.all()
+        elif user.role == "vendor":
+            return Order.objects.filter(vendor=user.vendor_profile)
+        return Order.objects.filter(user=user)
+
+
+class PaystackInitializePaymentView(APIView):
+    permission_classes = [permissions.IsAuthenticated]
+
+    def post(self, request, order_id):
+        order = get_object_or_404(Order, id=order_id, user=request.user)
+
+        if order.status != "pending":
+            return Response({"error": "Order is not pending."}, status=400)
+
+        # Amount in kobo (Naira × 100)
+        amount_kobo = int(order.total_price * 100)
+
+        response = Transaction.initialize(
+            reference=f"order_{order.id}",
+            email=request.user.email,
+            amount=amount_kobo,
+            callback_url="http://localhost:3000/payment/callback",  # frontend route
+        )
+
+        if response["status"] is True:
+            return Response(response["data"], status=200)
+        return Response(response, status=400)
+
+
+@method_decorator(csrf_exempt, name="dispatch")
+class PaystackWebhookView(APIView):
+    permission_classes = [permissions.AllowAny]  # Paystack needs access
+
+    def post(self, request):
+        payload = json.loads(request.body)
+        event = payload.get("event")
+
+        if event == "charge.success":
+            reference = payload["data"]["reference"]
+
+            # Verify payment
+            result = Transaction.verify(reference)
+            if result["status"] and result["data"]["status"] == "success":
+                transaction_ref = reference  # our generated uuid string
+                orders = Order.objects.filter(
+                    transaction_ref=transaction_ref, status="pending")
+                for order in orders:
+                    order.status = "paid"
+                    order.save()
+
+                    send_order_email(
+                        subject="Payment Successful",
+                        message=f"Your order #{order.id} has been paid successfully!",
+                        recipient_list=[order.user.email],
+                    )
+
+        return JsonResponse({"status": "success"}, status=200)
