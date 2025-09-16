@@ -3,7 +3,7 @@ from rest_framework.response import Response
 from rest_framework.views import APIView
 from django.shortcuts import get_object_or_404
 from decimal import Decimal
-from .models import Cart, CartItem, Order, OrderItem, VendorEarning
+from .models import Cart, CartItem, Order, OrderItem, VendorEarning, WithdrawalRequest
 from .serializers import CartSerializer, CartItemSerializer, OrderSerializer
 from accounts.permissions import IsAdmin, IsVendor, IsCustomer
 from .services import send_order_email
@@ -16,6 +16,7 @@ from django.http import JsonResponse
 from collections import defaultdict
 from django.db import transaction
 import uuid
+from django.utils import timezone
 
 
 class CartView(APIView):
@@ -243,3 +244,89 @@ class VendorEarningView(APIView):
             "total_withdrawn": earning.total_withdrawn,
             "updated_at": earning.updated_at
         })
+
+
+class WithdrawalRequestView(APIView):
+    permission_classes = [permissions.IsAuthenticated, IsVendor]
+
+    def post(self, request):
+        amount = Decimal(request.data.get("amount", "0.00"))
+        vendor_profile = request.user.vendor_profile
+        earning, _ = VendorEarning.objects.get_or_create(vendor=vendor_profile)
+
+        if amount <= 0:
+            return Response({"error": "Invalid amount"}, status=400)
+
+        if amount > earning.balance:
+            return Response({"error": "Insufficient balance"}, status=400)
+
+        withdrawal = WithdrawalRequest.objects.create(
+            vendor=vendor_profile,
+            amount=amount
+        )
+
+        return Response({
+            "id": withdrawal.id,
+            "amount": withdrawal.amount,
+            "status": withdrawal.status,
+            "created_at": withdrawal.created_at,
+        }, status=201)
+
+    def get(self, request):
+        withdrawals = WithdrawalRequest.objects.filter(
+            vendor=request.user.vendor_profile).order_by("-created_at")
+        data = [
+            {
+                "id": w.id,
+                "amount": w.amount,
+                "status": w.status,
+                "created_at": w.created_at,
+                "processed_at": w.processed_at,
+            }
+            for w in withdrawals
+        ]
+        return Response(data, status=200)
+
+
+class WithdrawalApprovalView(APIView):
+    permission_classes = [permissions.IsAuthenticated, IsAdmin]
+
+    def patch(self, request, pk):
+        withdrawal = get_object_or_404(WithdrawalRequest, pk=pk)
+
+        action = request.data.get("action")  # "approve" or "reject"
+        if action not in ["approve", "reject"]:
+            return Response({"error": "Invalid action"}, status=400)
+
+        if action == "approve":
+            withdrawal.status = "approved"
+            withdrawal.processed_at = timezone.now()
+            withdrawal.save()
+        else:
+            withdrawal.status = "rejected"
+            withdrawal.processed_at = timezone.now()
+            withdrawal.save()
+
+        return Response({"message": f"Withdrawal {withdrawal.status}"}, status=200)
+
+
+class WithdrawalMarkPaidView(APIView):
+    permission_classes = [permissions.IsAuthenticated, IsAdmin]
+
+    def patch(self, request, pk):
+        withdrawal = get_object_or_404(WithdrawalRequest, pk=pk)
+
+        if withdrawal.status != "approved":
+            return Response({"error": "Withdrawal must be approved first"}, status=400)
+
+        earning = VendorEarning.objects.get(vendor=withdrawal.vendor)
+        try:
+            earning.debit(withdrawal.amount)
+        except ValueError:
+            return Response({"error": "Insufficient balance"}, status=400)
+
+        withdrawal.status = "paid"
+        withdrawal.processed_at = timezone.now()
+        withdrawal.save()
+
+        return Response({"message": f"Withdrawal {withdrawal.amount} marked as paid"}, status=200)
