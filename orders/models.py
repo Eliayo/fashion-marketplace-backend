@@ -3,6 +3,7 @@ from django.conf import settings
 from django.db import models
 from products.models import Product, ProductVariant
 from accounts.models import VendorProfile, User
+from decimal import Decimal
 
 
 class Cart(models.Model):
@@ -75,3 +76,32 @@ class OrderItem(models.Model):
 
     def __str__(self):
         return f"{self.product.name} x {self.quantity}"
+
+
+class VendorEarning(models.Model):
+    vendor = models.OneToOneField(
+        "accounts.VendorProfile",
+        on_delete=models.CASCADE,
+        related_name="earning"
+    )
+    balance = models.DecimalField(
+        max_digits=12, decimal_places=2, default=Decimal("0.00"))
+    total_withdrawn = models.DecimalField(
+        max_digits=12, decimal_places=2, default=Decimal("0.00"))
+    updated_at = models.DateTimeField(auto_now=True)
+
+    def __str__(self):
+        return f"{self.vendor.user.username} - Balance: {self.balance}"
+
+    def credit(self, amount: Decimal):
+        """Increase vendor balance"""
+        self.balance += amount
+        self.save()
+
+    def debit(self, amount: Decimal):
+        """Deduct from balance (when withdrawing)"""
+        if amount > self.balance:
+            raise ValueError("Insufficient balance")
+        self.balance -= amount
+        self.total_withdrawn += amount
+        self.save()

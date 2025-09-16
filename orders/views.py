@@ -3,7 +3,7 @@ from rest_framework.response import Response
 from rest_framework.views import APIView
 from django.shortcuts import get_object_or_404
 from decimal import Decimal
-from .models import Cart, CartItem, Order, OrderItem
+from .models import Cart, CartItem, Order, OrderItem, VendorEarning
 from .serializers import CartSerializer, CartItemSerializer, OrderSerializer
 from accounts.permissions import IsAdmin, IsVendor, IsCustomer
 from .services import send_order_email
@@ -217,6 +217,12 @@ class PaystackWebhookView(APIView):
                     order.status = "paid"
                     order.save()
 
+                    # Credit vendor
+                    vendor_earning, _ = VendorEarning.objects.get_or_create(
+                        vendor=order.vendor)
+                    vendor_share = order.total_price - order.commission
+                    vendor_earning.credit(vendor_share)
+
                     send_order_email(
                         subject="Payment Successful",
                         message=f"Your order #{order.id} has been paid successfully!",
@@ -224,3 +230,16 @@ class PaystackWebhookView(APIView):
                     )
 
         return JsonResponse({"status": "success"}, status=200)
+
+
+class VendorEarningView(APIView):
+    permission_classes = [permissions.IsAuthenticated, IsVendor]
+
+    def get(self, request):
+        earning, _ = VendorEarning.objects.get_or_create(
+            vendor=request.user.vendor_profile)
+        return Response({
+            "balance": earning.balance,
+            "total_withdrawn": earning.total_withdrawn,
+            "updated_at": earning.updated_at
+        })
